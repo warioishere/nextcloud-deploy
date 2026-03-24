@@ -76,6 +76,16 @@ touch /tmp/installation
 clear
 start=$(date +%s)
 apt update && apt upgrade -y && apt autoremove -y && apt autoclean -y
+###########################
+# Locale fix              #
+###########################
+apt install -y locales
+sed -i 's/# de_CH.UTF-8 UTF-8/de_CH.UTF-8 UTF-8/' /etc/locale.gen
+sed -i 's/# de_DE.UTF-8 UTF-8/de_DE.UTF-8 UTF-8/' /etc/locale.gen
+locale-gen
+update-locale LANG=de_CH.UTF-8 LC_ALL=de_CH.UTF-8
+export LANG=de_CH.UTF-8
+export LC_ALL=de_CH.UTF-8
 # D: Linuxbenutzer ermitteln
 # E: identify the current user
 BENUTZERNAME=$(logname)
