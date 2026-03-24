@@ -90,7 +90,7 @@ fi
 # E: Ensure, admin software is available on the server
 if [ $TCP_OPT == "y" ] 
 then
-${wget} -O /etc/sysctl.d/100-nextcloud.conf -q https://codeberg.org/criegerde/nextcloud/raw/branch/master/etc/sysctl.d/100-nextcloud.conf
+${wget} -O /etc/sysctl.d/100-nextcloud.conf -q https://raw.githubusercontent.com/warioishere/nextcloud-deploy/main/etc/sysctl.d/100-nextcloud.conf
 fi
 # D: TCP-Optimierungen
 # E: TCP Optimizations
@@ -1260,7 +1260,7 @@ $lsbrelease -ar
 # E: Create Update-Script #
 ###########################
 cd /home/"$BENUTZERNAME"/
-${wget} -q https://codeberg.org/criegerde/nextcloud/raw/branch/master/skripte/update.sh
+${wget} -q https://raw.githubusercontent.com/warioishere/nextcloud-deploy/main/scripts/update.sh
 ${chmod} +x /home/"$BENUTZERNAME"/update.sh
 ###########################
 # D: Abschlußbildschirm   #
