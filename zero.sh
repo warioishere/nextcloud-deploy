@@ -1,13 +1,15 @@
 #!/bin/bash
 ##########################################################################################
-# Ubuntu 24 LTS x86_64
+# Ubuntu 26.04 LTS - amd64 and arm64 (incl. Raspberry Pi 5)
 # Nextcloud latest (or older Versions)
-# Based on nginx, PHP, MariaDB/postgreSQL, Redis, crowdsec, ufw ...
+# Based on nginx, PHP, MariaDB, Redis, crowdsec, ufw ...
+# Optional: ZFS mirror for the data directory, DynDNS via dyndns-api.yourdevice.ch
 # Carsten Rieger || https://www.c-rieger.de
-# Nextcloud 32.x - 33.x
+# Adapted by yourdevice.ch
 ##########################################################################################
 CONFIGFILE="zero.cfg"
 INSTALLATIONFILE="zero.sh"
+DYNDNS_API="https://dyndns-api.yourdevice.ch"
 #
 #########################################################################
 ### ! DO NOT CHANGE ANYTHING FROM HERE! // KEINE ÄNDERUNGEN AB HIER ! ###
@@ -37,7 +39,7 @@ if [ -f /tmp/installation ]; then
         echo " » "$(ls -lsha /tmp/installation)
 	      echo ""
         echo " +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++"
-        echo ""        
+        echo ""
         echo " » Prüfen und entfernen // Verify and remove :"
         echo " » sudo rm -f /tmp/installation"
         echo ""
@@ -55,7 +57,11 @@ if [ -f "$CONFIGFILE" ]; then
         . ./$CONFIGFILE
         NCDBNAME="${NCDBNAME,,}"
         NCDBUSER="${NCDBUSER,,}"
-        #sleep 1
+        # Defaults for config files that predate these options
+        ZFSMIRROR="${ZFSMIRROR:-ask}"
+        ZFSPOOL="${ZFSPOOL:-ncpool}"
+        NETMODE="${NETMODE:-ask}"
+        DYNDNS_ZONE="${DYNDNS_ZONE:-yourdevice-cloud.ch}"
 else
         clear
         echo ""
@@ -75,45 +81,56 @@ fi
 touch /tmp/installation
 clear
 start=$(date +%s)
-apt update && apt upgrade -y && apt autoremove -y && apt autoclean -y
+# apt and needrestart must not stop the run with interactive dialogs
+export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=a
 # D: Linuxbenutzer ermitteln
 # E: identify the current user
 BENUTZERNAME=$(logname)
 ###########################
 # IPv4 für "APT'          #
 ###########################
-if [ $APTIP4 == "y" ] 
+if [ "$APTIP4" == "y" ]
 then
-${echo} 'Acquire::ForceIPv4 "true";' >> /etc/apt/apt.conf.d/99force-ipv4
+echo 'Acquire::ForceIPv4 "true";' > /etc/apt/apt.conf.d/99force-ipv4
 fi
+apt update && apt upgrade -y && apt autoremove -y && apt autoclean -y
 # D: Sicherstellen, dass Basissoftware verfügbar ist
 # E: Ensure, admin software is available on the server
-if [ $TCP_OPT == "y" ] 
-then
-${wget} -O /etc/sysctl.d/100-nextcloud.conf -q https://raw.githubusercontent.com/warioishere/nextcloud-deploy/main/etc/sysctl.d/100-nextcloud.conf
-fi
-# D: TCP-Optimierungen
-# E: TCP Optimizations
-if [ -z "$(command -v lsb_release)" ]
-then
-apt install -y lsb-release
-fi
-if [ -z "$(command -v curl)" ]
-then
-apt install -y curl
-fi
-if [ -z "$(command -v wget)" ]
-then
-apt install -y wget
-fi
-if [ -z "$(command -v ping)" ]
-then
-apt install -y iputils-ping net-tools
-fi
+apt install -y lsb-release curl wget iputils-ping net-tools jq
+###########################
+# D: Systempfade auslesen #
+# E: Read system paths   #
+###########################
+adduser=$(command -v adduser)
+apt=$(command -v apt-get)
+aptmark=$(command -v apt-mark)
+cat=$(command -v cat)
+chmod=$(command -v chmod)
+chown=$(command -v chown)
+clear=$(command -v clear)
+cp=$(command -v cp)
+curl=$(command -v curl)
+date=$(command -v date)
+echo=$(command -v echo)
+lsbrelease=$(command -v lsb_release)
+ln=$(command -v ln)
+mkdir=$(command -v mkdir)
+mv=$(command -v mv)
+rm=$(command -v rm)
+sed=$(command -v sed)
+sudo=$(command -v sudo)
+su=$(command -v su)
+systemctl=$(command -v systemctl)
+tar=$(command -v tar)
+timedatectl=$(command -v timedatectl)
+touch=$(command -v touch)
+usermod=$(command -v usermod)
+wget=$(command -v wget)
 # D: Systemvoraussetzungen prüfen
 # E: Check system requirements
-if [ "$(lsb_release -r | awk '{ print $2 }')" = "22.04" ] || [ "$(lsb_release -r | awk '{ print $2 }')" = "24.04" ]
-then
+. /etc/os-release
+ARCH=$(dpkg --print-architecture)
 clear
 echo "*************************************************"
 echo "*  Pre-Installationschecks werden durchgefuehrt *"
@@ -122,25 +139,22 @@ echo "*************************************************"
 echo ""
 echo -e "* Test: Root ...............::::::::::::::::\033[32m OK\033[0m *"
 echo ""
-if [ "$(lsb_release -r | awk '{ print $2 }')" = "22.04" ]
+if [ "$ID" = "ubuntu" ] && [ "$VERSION_ID" = "26.04" ] \
+   && { [ "$ARCH" = "amd64" ] || [ "$ARCH" = "arm64" ]; }
 then
-echo -e "* Test: Ubuntu 22 was found ........::::::::\033[32m OK\033[0m *"
-fi
-if [ "$(lsb_release -r | awk '{ print $2 }')" = "24.04" ]
-then
-echo -e "* Test: Ubuntu 24 was found ........::::::::\033[32m OK\033[0m *"
-fi
+echo -e "* Test: Ubuntu $VERSION_ID ($ARCH) was found .....::::\033[32m OK\033[0m *"
 echo ""
 else
 clear
 echo ""
 echo -e " »\e[1;31m"
-echo "****************************************"
-echo "*   Sie verwenden kein Ubuntu 22/24    *"
-echo "* You aren't operating on Ubuntu 22/24 *"
-echo "****************************************"
+echo "******************************************************"
+echo "*   Sie verwenden kein Ubuntu 26.04 amd64/arm64      *"
+echo "*   You aren't operating on Ubuntu 26.04 amd64/arm64 *"
+echo "******************************************************"
 echo  -e "\033[0m"
 echo ""
+${rm} -f /tmp/installation
 exit 1
 fi
 ##########################
@@ -192,13 +206,193 @@ if [ ! -d "/home/$BENUTZERNAME/Nextcloud-Installationsskript/" ]; then
   echo -e "* Test: Installscript directory .....:::::::\033[32m OK\033[0m *"
   echo ""
   fi
+###########################
+# D: Abbruch-Funktion     #
+# E: Abort function       #
+###########################
+function abort() {
+  echo ""
+  echo -e " » \e[1;31m$1\033[0m"
+  echo ""
+  ${rm} -f /tmp/installation
+  exit 1
+  }
+###########################
+# D: ZFS-Mirror: Auswahl  #
+# E: ZFS mirror: choice   #
+###########################
+# The disks holding /, /boot, /boot/firmware or swap are never offered.
+function system_disks() {
+  local src
+  for m in / /boot /boot/firmware; do
+    src=$(findmnt -no SOURCE "$m" 2>/dev/null) || continue
+    # btrfs reports subvolumes as /dev/sda2[/@]
+    src=${src%%\[*}
+    lsblk -nrspo NAME,TYPE "$src" 2>/dev/null | awk '$2=="disk" {print $1}'
+  done
+  for src in $(swapon --show=NAME --noheadings 2>/dev/null); do
+    lsblk -nrspo NAME,TYPE "$src" 2>/dev/null | awk '$2=="disk" {print $1}'
+  done
+  }
+# Prints "device size_bytes in_use transport model" for every disk that could
+# go into the mirror. in_use is 1 when the disk has partitions or signatures.
+function zfs_candidates() {
+  local sys name size type tran model used
+  sys=" $(system_disks | sort -u | tr '\n' ' ') "
+  # JSON keeps empty columns (no transport on virtual disks) from shifting fields.
+  while IFS=$'\t' read -r name size type tran model; do
+    [ "$type" = "disk" ] || continue
+    case "$name" in /dev/loop*|/dev/zram*|/dev/sr*|/dev/fd*|/dev/mmcblk*boot*) continue ;; esac
+    [[ "$sys" == *" $name "* ]] && continue
+    [ "$size" -gt 0 ] 2>/dev/null || continue
+    used=0
+    [ "$(lsblk -nrpo NAME "$name" | wc -l)" -gt 1 ] && used=1
+    [ -n "$(lsblk -dnro FSTYPE "$name")" ] && used=1
+    echo "$name $size $used $tran $model"
+  done < <(lsblk -dbpJo NAME,SIZE,TYPE,TRAN,MODEL | jq -r '.blockdevices[]
+             | [.name, (.size|tostring), .type, (.tran // "-"), ((.model // "-") | gsub("\\s+"; "_"))] | @tsv')
+  }
+# Two disks count as the same size when they differ by at most 1 %.
+function same_size() {
+  local a=$1 b=$2 big=$1
+  [ "$b" -gt "$big" ] && big=$b
+  [ $(( (a > b ? a - b : b - a) * 100 )) -le "$big" ]
+  }
+# Resolves a disk to a stable /dev/disk/by-id name, so the pool survives
+# changed device names after a reboot.
+function disk_id() {
+  local link fallback=""
+  for link in /dev/disk/by-id/*; do
+    [[ "$link" == *-part* ]] && continue
+    [ "$(readlink -f "$link")" = "$1" ] || continue
+    case "$link" in
+      */wwn-*|*/nvme-eui.*) fallback=${fallback:-$link} ;;
+      *) echo "$link"; return ;;
+    esac
+  done
+  echo "${fallback:-$1}"
+  }
+function choose_zfs_mirror() {
+  ZFS_DISKS=()
+  [ "$ZFSMIRROR" = "n" ] && return
+  if [ "$ZFSMIRROR" = "y" ]; then
+    # Non-interactive: ZFSDISKS names the two disks.
+    read -r -a ZFS_DISKS <<< "$ZFSDISKS"
+    [ "${#ZFS_DISKS[@]}" -eq 2 ] || abort "ZFSMIRROR=\"y\" braucht genau zwei Disks in ZFSDISKS | needs exactly two disks in ZFSDISKS"
+    local d line
+    for d in "${ZFS_DISKS[@]}"; do
+      line=$(zfs_candidates | awk -v d="$d" '$1==d')
+      [ -n "$line" ] || abort "$d ist keine freie Datendisk | $d is not an eligible data disk"
+      if [ "$(echo "$line" | awk '{print $3}')" = "1" ] && [ "$ZFSWIPE" != "y" ]; then
+        abort "$d enthält Daten; zum Löschen ZFSWIPE=\"y\" setzen | $d holds data; set ZFSWIPE=\"y\" to wipe it"
+      fi
+    done
+    same_size "$(zfs_candidates | awk -v d="${ZFS_DISKS[0]}" '$1==d {print $2}')" \
+              "$(zfs_candidates | awk -v d="${ZFS_DISKS[1]}" '$1==d {print $2}')" \
+      || abort "Die Disks in ZFSDISKS sind nicht gleich gross | The disks in ZFSDISKS differ in size"
+    return
+  fi
+  # Interactive ("ask"): offer disks that have at least one partner of the same size.
+  local cands=() i j
+  mapfile -t cands < <(zfs_candidates)
+  local offer=()
+  for ((i=0; i<${#cands[@]}; i++)); do
+    for ((j=0; j<${#cands[@]}; j++)); do
+      [ $i -eq $j ] && continue
+      if same_size "$(echo "${cands[$i]}" | awk '{print $2}')" "$(echo "${cands[$j]}" | awk '{print $2}')"; then
+        offer+=("${cands[$i]}"); break
+      fi
+    done
+  done
+  [ "${#offer[@]}" -lt 2 ] && return
+  echo "*************************************************"
+  echo "*  ZFS-Mirror für das Nextcloud-Datenverzeichnis *"
+  echo "*  ZFS mirror for the Nextcloud data directory   *"
+  echo "*************************************************"
+  echo ""
+  for ((i=0; i<${#offer[@]}; i++)); do
+    read -r name size used tran model <<< "${offer[$i]}"
+    printf "  [%d] %-14s %6s GB  %-5s %-28s %s\n" $((i+1)) "$name" $((size / 1000000000)) "$tran" \
+      "$model" "$([ "$used" = 1 ] && echo '<- ENTHAELT DATEN / HAS DATA')"
+  done
+  echo ""
+  local answer a b
+  if [ "${#offer[@]}" -eq 2 ]; then
+    read -r -p "* Aus diesen zwei Disks einen ZFS-Mirror anlegen? / Create a ZFS mirror from these two disks? [j/N] " answer
+    [[ "$answer" =~ ^[jJyY]$ ]] || return
+    a=1; b=2
+  else
+    read -r -p "* Nummern der zwei Disks (z.B. '1 2'), leer = kein ZFS / Numbers of two disks, empty = no ZFS: " a b
+    [ -z "$a" ] && return
+    [[ "$a" =~ ^[0-9]+$ && "$b" =~ ^[0-9]+$ && $a -ne $b && $a -ge 1 && $b -ge 1 && $a -le ${#offer[@]} && $b -le ${#offer[@]} ]] \
+      || abort "Ungültige Auswahl | Invalid selection"
+    same_size "$(echo "${offer[$((a-1))]}" | awk '{print $2}')" "$(echo "${offer[$((b-1))]}" | awk '{print $2}')" \
+      || abort "Die gewählten Disks sind nicht gleich gross | The selected disks differ in size"
+  fi
+  ZFS_DISKS=("$(echo "${offer[$((a-1))]}" | awk '{print $1}')" "$(echo "${offer[$((b-1))]}" | awk '{print $1}')")
+  if echo "${offer[$((a-1))]} ${offer[$((b-1))]}" | awk '{exit !($3==1 || $8==1)}'; then
+    echo ""
+    echo -e "* \e[1;31mACHTUNG: Alle Daten auf ${ZFS_DISKS[*]} werden gelöscht!\033[0m"
+    echo -e "* \e[1;31mWARNING: All data on ${ZFS_DISKS[*]} will be erased!\033[0m"
+    read -r -p "* Zum Bestätigen LOESCHEN eingeben / Type LOESCHEN to confirm: " answer
+    [ "$answer" = "LOESCHEN" ] || abort "Abgebrochen, keine Disk verändert | Aborted, no disk changed"
+  fi
+  echo ""
+  }
+###########################
+# D: Erreichbarkeit       #
+# E: Reachability         #
+###########################
+function choose_network() {
+  local answer
+  if [ "$NETMODE" = "ask" ]; then
+    echo "*************************************************"
+    echo "*  Öffentliche Erreichbarkeit / Public address  *"
+    echo "*************************************************"
+    echo "  [1] Feste öffentliche IP, DNS-Eintrag selbst gesetzt / static public IP, own DNS record"
+    echo "  [2] DynDNS über dyndns-api.yourdevice.ch / DynDNS via dyndns-api.yourdevice.ch"
+    read -r -p "* Auswahl / Choice [1/2]: " answer
+    case "$answer" in
+      1) NETMODE="static" ;;
+      2) NETMODE="dyndns" ;;
+      *) abort "Ungültige Auswahl | Invalid selection" ;;
+    esac
+  fi
+  case "$NETMODE" in
+    static) return ;;
+    dyndns) ;;
+    *) abort "NETMODE muss ask, static oder dyndns sein | NETMODE must be ask, static or dyndns" ;;
+  esac
+  if [ -z "$DYNDNS_HOSTNAME" ]; then
+    read -r -p "* DynDNS-Hostname (z.B. kunde1 oder kunde1.$DYNDNS_ZONE): " DYNDNS_HOSTNAME
+  fi
+  DYNDNS_HOSTNAME="${DYNDNS_HOSTNAME,,}"
+  DYNDNS_HOSTNAME="${DYNDNS_HOSTNAME%.}"
+  [[ "$DYNDNS_HOSTNAME" == *.* ]] || DYNDNS_HOSTNAME="$DYNDNS_HOSTNAME.$DYNDNS_ZONE"
+  [[ "$DYNDNS_HOSTNAME" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$ ]] \
+    && [[ "$DYNDNS_HOSTNAME" == *."$DYNDNS_ZONE" ]] \
+    || abort "Ungültiger Hostname für Zone $DYNDNS_ZONE | Invalid hostname for zone $DYNDNS_ZONE"
+  if [ -z "$DYNDNS_KEY" ]; then
+    read -r -s -p "* DynDNS-API-Key (Eingabe unsichtbar / input hidden): " DYNDNS_KEY
+    echo ""
+  fi
+  [[ "$DYNDNS_KEY" =~ ^[0-9a-f]{64}$ ]] || abort "Der API-Key muss aus 64 Hex-Zeichen bestehen | The API key must be 64 hex characters"
+  NEXTCLOUDDNS="$DYNDNS_HOSTNAME"
+  }
+choose_zfs_mirror
+choose_network
   echo "*************************************************"
   echo -e "\033[32m*  Pre-Installationschecks erfolgreich!         *\033[0m"
   echo -e "\033[32m*  Pre-Installation checks successfull!         *\033[0m"
   echo "*************************************************"
   echo ""
+  if [ "${#ZFS_DISKS[@]}" -eq 2 ]; then
+  echo "* ZFS-Mirror: ${ZFS_DISKS[*]} -> $NEXTCLOUDDATAPATH"
+  fi
+  echo "* Domain: $NEXTCLOUDDNS ($NETMODE)"
+  echo ""
   echo -e "* Press Ctrl+C To abort  // Drücke STRG+C um abzubrechen"
-  seconds=2
+  seconds=5
   while [ $seconds -gt 0 ]; do
    echo -ne "* INSTALLATION STARTET IN $seconds\033[0K\r"
    sleep 1
@@ -210,36 +404,6 @@ if [ ! -d "/home/$BENUTZERNAME/Nextcloud-Installationsskript/" ]; then
 # E: Identify local ip    #
 ###########################
 IPA=$(hostname -I | awk '{print $1}')
-###########################
-# D: Systempfade auslesen #
-# E: Read system paths   #
-###########################
-addaptrepository="add-apt-repository"
-adduser=$(command -v adduser)
-apt=$(command -v apt-get)
-aptmark=$(command -v apt-mark)
-cat=$(command -v cat)
-chmod=$(command -v chmod)
-chown=$(command -v chown)
-clear=$(command -v clear)
-cp=$(command -v cp)
-curl=$(command -v curl)
-date=$(command -v date)
-echo=$(command -v echo)
-lsbrelease=$(command -v lsb_release)
-ln=$(command -v ln)
-mkdir=$(command -v mkdir)
-mv=$(command -v mv)
-rm=$(command -v rm)
-sed=$(command -v sed)
-sudo=$(command -v sudo)
-su=$(command -v su)
-systemctl=$(command -v systemctl)
-tar=$(command -v tar)
-timedatectl=$(command -v timedatectl)
-touch=$(command -v touch)
-usermod=$(command -v usermod)
-wget=$(command -v wget)
 ###########################
 # Timezone
 ###########################
@@ -312,12 +476,7 @@ function setHOLD() {
 ###########################
 function restart_all_services() {
   ${systemctl} restart nginx
-  if [ $DATABASE == "m" ]
-  then
-        ${systemctl} restart mysql
-  else
-        ${systemctl} restart postgresql
-  fi
+  ${systemctl} restart mysql
   ${systemctl} restart redis-server php$PHPVERSION-fpm
   }
 ###########################
@@ -327,6 +486,107 @@ function restart_all_services() {
 function nextcloud_scan_data() {
   ${sudo} -u www-data /usr/bin/php /var/www/nextcloud/occ files:scan --all
   ${sudo} -u www-data /usr/bin/php /var/www/nextcloud/occ files:scan-app-data
+  }
+###########################
+# D: ZFS-Mirror anlegen   #
+# E: Create ZFS mirror    #
+###########################
+function setup_zfs_mirror() {
+  [ "${#ZFS_DISKS[@]}" -eq 2 ] || return 0
+  ${clear}
+  ${echo} "ZFS-Mirror"
+  ${echo} ""
+  if [ -d "$NEXTCLOUDDATAPATH" ] && [ -n "$(ls -A "$NEXTCLOUDDATAPATH")" ]; then
+    abort "$NEXTCLOUDDATAPATH ist nicht leer, ZFS wird nicht darüber gelegt | $NEXTCLOUDDATAPATH is not empty"
+  fi
+  ${apt} install -y zfsutils-linux
+  # The module comes as a separate package: the meta package follows kernel
+  # updates, the versioned one covers the kernel that is running right now.
+  # A kernel flavour without these packages fails at modprobe below.
+  local flavour
+  flavour=$(uname -r | ${sed} -E 's/^[0-9.]+-[0-9]+-//')
+  if apt-cache show "linux-modules-zfs-$flavour" >/dev/null 2>&1; then
+    ${apt} install -y "linux-modules-zfs-$flavour"
+    apt-cache show "linux-main-modules-zfs-$(uname -r)" >/dev/null 2>&1 \
+      && ${apt} install -y "linux-main-modules-zfs-$(uname -r)"
+  fi
+  modprobe zfs || abort "Das ZFS-Kernelmodul lässt sich nicht laden, keine Disk verändert | The ZFS kernel module does not load, no disk changed"
+  local ids=() d
+  for d in "${ZFS_DISKS[@]}"; do
+    ids+=("$(disk_id "$d")")
+    wipefs -a "$d"
+  done
+  zpool create -f -o ashift=12 \
+    -O compression=lz4 -O atime=off -O xattr=sa -O acltype=posixacl -O normalization=formD \
+    -O mountpoint=none -O canmount=off \
+    "$ZFSPOOL" mirror "${ids[@]}" || abort "zpool create ist fehlgeschlagen | zpool create failed"
+  zfs create -o mountpoint="$NEXTCLOUDDATAPATH" "$ZFSPOOL/ncdata" || abort "zfs create ist fehlgeschlagen | zfs create failed"
+  zpool status "$ZFSPOOL"
+  }
+###########################
+# D: DynDNS-Client        #
+# E: DynDNS client        #
+###########################
+function setup_dyndns() {
+  [ "$NETMODE" = "dyndns" ] || return 0
+  ${clear}
+  ${echo} "DynDNS: $DYNDNS_HOSTNAME"
+  ${echo} ""
+  # Only the key is secret; the service reads it through LoadCredential.
+  install -d -m 0755 /etc/yourdevice-dyndns
+  ( umask 077; printf '%s' "$DYNDNS_KEY" > /etc/yourdevice-dyndns/key )
+  ${cat} <<EOF >/etc/yourdevice-dyndns/dyndns.conf
+DYNDNS_API="$DYNDNS_API"
+DYNDNS_HOSTNAME="$DYNDNS_HOSTNAME"
+DYNDNS_ZONE="$DYNDNS_ZONE"
+EOF
+  ${cat} <<'EOF' >/usr/local/sbin/yourdevice-dyndns
+#!/bin/bash
+# Points the DynDNS hostname at this machine's public IPv4. The API takes the
+# address from the connection itself, so no IP lookup service is involved.
+# The key goes to curl on stdin and never appears on a command line.
+set -euo pipefail
+. /etc/yourdevice-dyndns/dyndns.conf
+key=$(cat "${CREDENTIALS_DIRECTORY:-/etc/yourdevice-dyndns}/key")
+printf '{"key":"%s","hostname":"%s","zone":"%s"}' "$key" "$DYNDNS_HOSTNAME" "$DYNDNS_ZONE" \
+  | curl -4 -fsS --max-time 30 -H 'Content-Type: application/json' --data-binary @- "$DYNDNS_API/update"
+echo
+EOF
+  ${chmod} 755 /usr/local/sbin/yourdevice-dyndns
+  ${cat} <<'EOF' >/etc/systemd/system/yourdevice-dyndns.service
+[Unit]
+Description=Update the yourdevice DynDNS record
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+# Runs as a throwaway user; systemd hands it the root-only key file.
+DynamicUser=yes
+LoadCredential=key:/etc/yourdevice-dyndns/key
+ExecStart=/usr/local/sbin/yourdevice-dyndns
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+EOF
+  ${cat} <<'EOF' >/etc/systemd/system/yourdevice-dyndns.timer
+[Unit]
+Description=Update the yourdevice DynDNS record every 5 minutes
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target
+EOF
+  ${systemctl} daemon-reload
+  local response
+  response=$(/usr/local/sbin/yourdevice-dyndns) || abort "DynDNS-Update fehlgeschlagen, Hostname und Key prüfen | DynDNS update failed, check hostname and key"
+  ${systemctl} enable --now yourdevice-dyndns.timer
+  ${echo} "DynDNS: $DYNDNS_HOSTNAME -> $(echo "$response" | jq -r '.ip // empty')"
   }
 ###########################
 # D: Basissoftware        #
@@ -340,52 +600,24 @@ sleep 1
 ${apt} update
 ${apt} upgrade -y
 ${apt} install -y apt-transport-https bash-completion bzip2 ca-certificates cron curl dialog dirmngr ffmpeg ghostscript gpg gnupg gnupg2 htop jq \
-libfile-fcntllock-perl libfontconfig1 libfuse2 locate npm net-tools rsyslog screen smbclient socat software-properties-common ssl-cert tree unzip wget zip ubuntu-keyring
+libfile-fcntllock-perl libfontconfig1 locate npm net-tools rsyslog screen smbclient socat ssl-cert tree unzip wget zip ubuntu-keyring
 ###########################
 # D: Energiesparmodus: aus#
 # E: Energy mode: off     #
 ###########################
 ${systemctl} mask sleep.target suspend.target hibernate.target hybrid-sleep.target
 ###########################
-# PHP 8 Repositories      #
+# D: ZFS und DynDNS       #
+# E: ZFS and DynDNS       #
 ###########################
-${addaptrepository} ppa:ondrej/php -y
-if [ "$(lsb_release -r | awk '{ print $2 }')" = "24.04" ]
-then
-curl "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xB8DC7E53946656EFBCE4C1DD71DAEAAB4AD4CAB6" | gpg --dearmor | sudo tee /usr/share/keyrings/ondrej-ubuntu-php.gpg >/dev/null
-${cat} <<EOF > /etc/apt/sources.list.d/ondrej-ubuntu-php-noble.sources
-Types: deb
-URIs: https://ppa.launchpadcontent.net/ondrej/php/ubuntu/
-Suites: noble
-Components: main
-Signed-By: /usr/share/keyrings/ondrej-ubuntu-php.gpg
-EOF
-fi
+setup_zfs_mirror
+setup_dyndns
 ###########################
 # NGINX Repositories      #
 ###########################
 ${curl} https://nginx.org/keys/nginx_signing.key | gpg --dearmor | sudo tee /usr/share/keyrings/nginx-archive-keyring.gpg >/dev/null
-echo "deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] http://nginx.org/packages/mainline/ubuntu `lsb_release -cs` nginx" | sudo tee /etc/apt/sources.list.d/nginx.list
-###########################
-# DB Repositories         #
-###########################
-if [ $DATABASE == "m" ]
-then
-mkdir -p /etc/apt/keyrings
-curl -o /etc/apt/keyrings/mariadb-keyring.pgp 'https://mariadb.org/mariadb_release_signing_key.pgp'
-cat <<EOF >/etc/apt/sources.list.d/mariadb.sources
-X-Repolib-Name: MariaDB
-Types: deb
-URIs: https://deb.mariadb.org/11.8/ubuntu
-Suites: noble
-Components: main main/debug
-# Architectures: amd64
-Signed-By: /etc/apt/keyrings/mariadb-keyring.pgp
-EOF
-else
-    ${wget}  -O- https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor | sudo tee /usr/share/keyrings/postgresql-archive-keyring.gpg >/dev/null
-    echo "deb [signed-by=/usr/share/keyrings/postgresql-archive-keyring.gpg] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list      
-fi
+echo "deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] http://nginx.org/packages/mainline/ubuntu $VERSION_CODENAME nginx" | sudo tee /etc/apt/sources.list.d/nginx.list
+${echo} -e "Package: *\nPin: origin nginx.org\nPin: release o=nginx\nPin-Priority: 900\n" | sudo tee /etc/apt/preferences.d/99nginx
 ###########################
 # D: Entfernen Autoupdates#
 # E: Remove unatt.upgrades#
@@ -483,17 +715,19 @@ ${clear}
 ${echo} "PHP-Installation"
 ${echo} ""
 sleep 1
-${apt} install -y php-common php$PHPVERSION-{fpm,gd,curl,xml,zip,intl,mbstring,bz2,ldap,apcu,bcmath,gmp,imagick,igbinary,redis,smbclient,sqlite3,cli,common,opcache,readline} imagemagick ldap-utils nfs-common cifs-utils --allow-change-held-packages
-${apt} install -y libmagickcore-6.q16-6-extra --allow-change-held-packages
+${apt} install -y php-{common,fpm,gd,curl,xml,zip,intl,mbstring,bz2,ldap,apcu,bcmath,gmp,imagick,igbinary,redis,smbclient,sqlite3,cli,readline} imagemagick ldap-utils nfs-common cifs-utils --allow-change-held-packages
+# The PHP version is the one Ubuntu ships (8.5 on 26.04)
+PHPVERSION=$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;')
+# The ImageMagick package names carry the library ABI and differ per release
+${apt} install -y "$(apt-cache pkgnames libmagickcore | grep -E -- '\.q16-[0-9]+-extra$' | sort | tail -1)" --allow-change-held-packages
+IMPOLICY=$(ls /etc/ImageMagick-*/policy.xml | tail -1)
 AvailableRAM=$(/usr/bin/awk '/MemAvailable/ {printf "%d", $2/1024}' /proc/meminfo)
 ${cp} /etc/php/$PHPVERSION/fpm/pool.d/www.conf /etc/php/$PHPVERSION/fpm/pool.d/www.conf.bak
 ${cp} /etc/php/$PHPVERSION/fpm/php-fpm.conf /etc/php/$PHPVERSION/fpm/php-fpm.conf.bak
 ${cp} /etc/php/$PHPVERSION/cli/php.ini /etc/php/$PHPVERSION/cli/php.ini.bak
 ${cp} /etc/php/$PHPVERSION/fpm/php.ini /etc/php/$PHPVERSION/fpm/php.ini.bak
-${cp} /etc/php/$PHPVERSION/mods-available/opcache.ini /etc/php/$PHPVERSION/mods-available/opcache.ini.bak
 ${cp} /etc/php/$PHPVERSION/mods-available/apcu.ini /etc/php/$PHPVERSION/mods-available/apcu.ini.bak
-${cp} /etc/php/$PHPVERSION/fpm/php-fpm.conf /etc/php/$PHPVERSION/fpm/php-fpm.conf.bak
-${cp} /etc/ImageMagick-6/policy.xml /etc/ImageMagick-6/policy.xml.bak
+${cp} "$IMPOLICY" "$IMPOLICY.bak"
 ${sed} -i 's/pm = dynamic/pm = ondemand/' /etc/php/$PHPVERSION/fpm/pool.d/www.conf
 ${sed} -i 's/;env\[HOSTNAME\] = /env[HOSTNAME] = /' /etc/php/$PHPVERSION/fpm/pool.d/www.conf
 ${sed} -i 's/;env\[TMP\] = /env[TMP] = /' /etc/php/$PHPVERSION/fpm/pool.d/www.conf
@@ -528,29 +762,32 @@ ${sed} -i 's/post_max_size =.*/post_max_size = 10240M/' /etc/php/$PHPVERSION/fpm
 ${sed} -i 's/upload_max_filesize =.*/upload_max_filesize = '$UPLOADSIZE'/' /etc/php/$PHPVERSION/fpm/php.ini
 ${sed} -i 's|;date.timezone.*|date.timezone = '$CURRENTTIMEZONE'|' /etc/php/$PHPVERSION/fpm/php.ini
 ${sed} -i 's/;session.cookie_secure.*/session.cookie_secure = True/' /etc/php/$PHPVERSION/fpm/php.ini
-${sed} -i 's/;opcache.enable=.*/opcache.enable=1/' /etc/php/$PHPVERSION/fpm/php.ini
-${sed} -i 's/;opcache.enable_cli=.*/opcache.enable_cli=1/' /etc/php/$PHPVERSION/fpm/php.ini
-${sed} -i 's/;opcache.memory_consumption=.*/opcache.memory_consumption=256/' /etc/php/$PHPVERSION/fpm/php.ini
-${sed} -i 's/;opcache.interned_strings_buffer=.*/opcache.interned_strings_buffer=64/' /etc/php/$PHPVERSION/fpm/php.ini
-${sed} -i 's/;opcache.max_accelerated_files=.*/opcache.max_accelerated_files=100000/' /etc/php/$PHPVERSION/fpm/php.ini
-${sed} -i 's/;opcache.validate_timestamps=.*/opcache.validate_timestamps=1/' /etc/php/$PHPVERSION/fpm/php.ini
-${sed} -i 's/;opcache.revalidate_freq=.*/opcache.revalidate_freq=0/' /etc/php/$PHPVERSION/fpm/php.ini
-${sed} -i 's/;opcache.save_comments=.*/opcache.save_comments=1/' /etc/php/$PHPVERSION/fpm/php.ini
-${sed} -i 's/;opcache.huge_code_pages=.*/opcache.huge_code_pages=0/' /etc/php/$PHPVERSION/fpm/php.ini
 ${sed} -i 's/allow_url_fopen =.*/allow_url_fopen = 1/' /etc/php/$PHPVERSION/fpm/php.ini
 ${sed} -i 's/;cgi.fix_pathinfo.*/cgi.fix_pathinfo = 0/' /etc/php/$PHPVERSION/fpm/php.ini
 ${sed} -i 's/session.gc_maxlifetime =.*/session.gc_maxlifetime = 36000/' /etc/php/$PHPVERSION/fpm/php.ini
 ${sed} -i '$aapc.enable_cli=1' /etc/php/$PHPVERSION/mods-available/apcu.ini
-${sed} -i 's/opcache.jit=off/opcache.jit=on/' /etc/php/"$PHPVERSION"/mods-available/opcache.ini
-${sed} -i '$aopcache.jit=1255' /etc/php/"$PHPVERSION"/mods-available/opcache.ini
-${sed} -i '$aopcache.jit_buffer_size=256M' /etc/php/$PHPVERSION/mods-available/opcache.ini
+# OPcache settings for PHP-FPM in their own file: from PHP 8.5 on OPcache is
+# built in and there is no opcache.ini to edit.
+${cat} <<EOF >/etc/php/$PHPVERSION/fpm/conf.d/90-nextcloud-opcache.ini
+opcache.enable=1
+opcache.enable_cli=1
+opcache.memory_consumption=256
+opcache.interned_strings_buffer=64
+opcache.max_accelerated_files=100000
+opcache.validate_timestamps=1
+opcache.revalidate_freq=0
+opcache.save_comments=1
+opcache.huge_code_pages=0
+opcache.jit=1255
+opcache.jit_buffer_size=256M
+EOF
 ${sed} -i 's|;emergency_restart_threshold.*|emergency_restart_threshold = 10|g' /etc/php/$PHPVERSION/fpm/php-fpm.conf
 ${sed} -i 's|;emergency_restart_interval.*|emergency_restart_interval = 1m|g' /etc/php/$PHPVERSION/fpm/php-fpm.conf
 ${sed} -i 's|;process_control_timeout.*|process_control_timeout = 10|g' /etc/php/$PHPVERSION/fpm/php-fpm.conf
-${sed} -i 's/rights=\"none\" pattern=\"PS\"/rights=\"read|write\" pattern=\"PS\"/' /etc/ImageMagick-6/policy.xml
-${sed} -i 's/rights=\"none\" pattern=\"EPS\"/rights=\"read|write\" pattern=\"EPS\"/' /etc/ImageMagick-6/policy.xml
-${sed} -i 's/rights=\"none\" pattern=\"PDF\"/rights=\"read|write\" pattern=\"PDF\"/' /etc/ImageMagick-6/policy.xml
-${sed} -i 's/rights=\"none\" pattern=\"XPS\"/rights=\"read|write\" pattern=\"XPS\"/' /etc/ImageMagick-6/policy.xml
+${sed} -i 's/rights=\"none\" pattern=\"PS\"/rights=\"read|write\" pattern=\"PS\"/' "$IMPOLICY"
+${sed} -i 's/rights=\"none\" pattern=\"EPS\"/rights=\"read|write\" pattern=\"EPS\"/' "$IMPOLICY"
+${sed} -i 's/rights=\"none\" pattern=\"PDF\"/rights=\"read|write\" pattern=\"PDF\"/' "$IMPOLICY"
+${sed} -i 's/rights=\"none\" pattern=\"XPS\"/rights=\"read|write\" pattern=\"XPS\"/' "$IMPOLICY"
 if [ ! -e "/usr/bin/gs" ]; then
 ${ln} -s /usr/local/bin/gs /usr/bin/gs
 fi
@@ -566,9 +803,7 @@ ${clear}
 ${echo} "DB-Installation"
 ${echo} ""
 sleep 1
-if [ $DATABASE == "m" ]
-then
-        ${apt} install -y php$PHPVERSION-mysql libdbd-mysql-perl libmariadb3 mariadb-common mysql-common mariadb-server mariadb-client --allow-change-held-packages
+        ${apt} install -y php-mysql libdbd-mysql-perl libmariadb3 mariadb-common mysql-common mariadb-server mariadb-client --allow-change-held-packages
         ${cp} /etc/php/$PHPVERSION/fpm/conf.d/20-mysqli.ini /etc/php/$PHPVERSION/fpm/conf.d/20-mysqli.ini.bak
         ${cat} <<EOF >>/etc/php/$PHPVERSION/fpm/conf.d/20-mysqli.ini
 [mysql]
@@ -582,6 +817,13 @@ mysql.connect_timeout=60
 mysql.trace_mode=Off
 EOF
         ${systemctl} stop mysql
+        # A fresh MariaDB 11.8 lives in /var/lib/mariadb; the package keeps using
+        # /var/lib/mysql only when that directory already existed
+        MARIADBDATADIR=/var/lib/mysql
+        [ -d /var/lib/mariadb ] && MARIADBDATADIR=/var/lib/mariadb
+        # InnoDB buffer pool: a quarter of the RAM, between 512 MB and 4 GB, so a
+        # Raspberry Pi keeps room for PHP-FPM and Redis
+        MARIADBBUFFER=$(/usr/bin/awk '/MemTotal/ {m = int($2 / 1024 / 4); if (m < 512) m = 512; if (m > 4096) m = 4096; print m "M"}' /proc/meminfo)
         ${cp} /etc/mysql/my.cnf /etc/mysql/my.cnf.bak
         ${cat} <<EOF >/etc/mysql/my.cnf
 [client]
@@ -599,12 +841,12 @@ bind-address = 127.0.0.1
 binlog_format = ROW
 character-set-server = utf8mb4
 collation-server = utf8mb4_general_ci
-datadir = /var/lib/mysql
+datadir = $MARIADBDATADIR
 default_storage_engine = InnoDB
 expire_logs_days = 2
 slave_connections_needed_for_purge = 0
 general_log_file = /var/log/mysql/mysql.log
-innodb_buffer_pool_size = 1G
+innodb_buffer_pool_size = $MARIADBBUFFER
 innodb_log_buffer_size = 32M
 innodb_log_file_size = 512M
 innodb_read_only_compressed=OFF
@@ -648,7 +890,9 @@ quote-names
 [isamchk]
 key_buffer = 16M
 EOF
-${systemctl} restart mysql
+mkdir -p /var/log/mysql
+chown -R mysql:mysql /var/log/mysql
+${systemctl} restart mysql || abort "MariaDB startet nicht (journalctl -u mariadb) | MariaDB does not start"
 mysql=$(command -v mariadb)
 ${mysql} -e "CREATE DATABASE ${NCDBNAME} CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;"
 ${mysql} -e "CREATE USER ${NCDBUSER}@localhost IDENTIFIED BY '${NCDBPASSWORD}';"
@@ -666,96 +910,22 @@ y
 y
 EOF
         mariadb -u root -e "SET PASSWORD FOR root@'localhost' = PASSWORD('$MARIADBROOTPASSWORD'); FLUSH PRIVILEGES;"
-else
-cd /
-${apt} install -y php$PHPVERSION-pgsql postgresql-17 --allow-change-held-packages
-sudo -u postgres psql -c "CREATE USER ${NCDBUSER} WITH PASSWORD '${NCDBPASSWORD}' CREATEDB;"
-sudo -u postgres psql -c "CREATE DATABASE ${NCDBNAME} TEMPLATE template0 ENCODING 'UTF8';"
-sudo -u postgres psql -c "ALTER DATABASE ${NCDBNAME} OWNER TO ${NCDBUSER};"
-sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE ${NCDBNAME} TO ${NCDBUSER};"
-sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON SCHEMA public TO ${NCDBUSER};"
-${systemctl} restart postgresql
-cat <<EOF >>/etc/php/$PHPVERSION/fpm/conf.d/20-pgsql.ini
-[PostgresSQL]
-pgsql.allow_persistent = On
-pgsql.auto_reset_persistent = Off
-pgsql.max_persistent = -1
-pgsql.max_links = -1
-pgsql.ignore_notice = 0
-pgsql.log_notice = 0
-EOF
-${systemctl} restart postgresql
-fi
-# -- DB Version: 15,16
-# -- OS Type: linux
-# -- DB Type: web
-# -- Total Memory (RAM): 8 GB
-# -- CPUs num: 4
-# -- Connections num: 100
-# -- Data Storage: ssd
-if [ "$AvailableRAM" -ge "8192" ];then 
-sudo -u postgres psql -c "ALTER SYSTEM SET max_connections = '100';"
-sudo -u postgres psql -c "ALTER SYSTEM SET shared_buffers = '2GB';"
-sudo -u postgres psql -c "ALTER SYSTEM SET effective_cache_size = '6GB';"
-sudo -u postgres psql -c "ALTER SYSTEM SET maintenance_work_mem = '512MB';"
-sudo -u postgres psql -c "ALTER SYSTEM SET checkpoint_completion_target = '0.9';"
-sudo -u postgres psql -c "ALTER SYSTEM SET wal_buffers = '16MB';"
-sudo -u postgres psql -c "ALTER SYSTEM SET default_statistics_target = '100';"
-sudo -u postgres psql -c "ALTER SYSTEM SET random_page_cost = '1.1';"
-sudo -u postgres psql -c "ALTER SYSTEM SET effective_io_concurrency = '200';"
-sudo -u postgres psql -c "ALTER SYSTEM SET work_mem = '20164kB';"
-sudo -u postgres psql -c "ALTER SYSTEM SET huge_pages = 'off';"
-sudo -u postgres psql -c "ALTER SYSTEM SET min_wal_size = '1GB';"
-sudo -u postgres psql -c "ALTER SYSTEM SET max_wal_size = '4GB';"
-sudo -u postgres psql -c "ALTER SYSTEM SET max_worker_processes = '4';"
-sudo -u postgres psql -c "ALTER SYSTEM SET max_parallel_workers_per_gather = '2';"
-sudo -u postgres psql -c "ALTER SYSTEM SET max_parallel_workers = '4';"
-sudo -u postgres psql -c "ALTER SYSTEM SET max_parallel_maintenance_workers = '2';"
-else
-# -- DB Version: 15,16
-# -- OS Type: linux
-# -- DB Type: web
-# -- Total Memory (RAM): 4 GB
-# -- CPUs num: 4
-# -- Connections num: 100
-# -- Data Storage: ssd
-sudo -u postgres psql -c "ALTER SYSTEM SET max_connections = '100';"
-sudo -u postgres psql -c "ALTER SYSTEM SET shared_buffers = '1GB';"
-sudo -u postgres psql -c "ALTER SYSTEM SET effective_cache_size = '3GB';"
-sudo -u postgres psql -c "ALTER SYSTEM SET maintenance_work_mem = '256MB';"
-sudo -u postgres psql -c "ALTER SYSTEM SET checkpoint_completion_target = '0.9';"
-sudo -u postgres psql -c "ALTER SYSTEM SET wal_buffers = '16MB';"
-sudo -u postgres psql -c "ALTER SYSTEM SET default_statistics_target = '100';"
-sudo -u postgres psql -c "ALTER SYSTEM SET random_page_cost = '1.1';"
-sudo -u postgres psql -c "ALTER SYSTEM SET effective_io_concurrency = '200';"
-sudo -u postgres psql -c "ALTER SYSTEM SET work_mem = '9709kB';"
-sudo -u postgres psql -c "ALTER SYSTEM SET huge_pages = 'off';"
-sudo -u postgres psql -c "ALTER SYSTEM SET min_wal_size = '1GB';"
-sudo -u postgres psql -c "ALTER SYSTEM SET max_wal_size = '4GB';"
-sudo -u postgres psql -c "ALTER SYSTEM SET max_worker_processes = '4';"
-sudo -u postgres psql -c "ALTER SYSTEM SET max_parallel_workers_per_gather = '2';"
-sudo -u postgres psql -c "ALTER SYSTEM SET max_parallel_workers = '4';"
-sudo -u postgres psql -c "ALTER SYSTEM SET max_parallel_maintenance_workers = '2';"
-fi
 ###########################
 # Installation Redis      #
 ###########################
 ${clear}
 ${echo} "REDIS-Installation"
 ${echo} ""
-${curl} -fsSL https://packages.redis.io/gpg | gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg
-${chmod} 644 /usr/share/keyrings/redis-archive-keyring.gpg
-${echo} "deb [signed-by=/usr/share/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb noble main" | tee /etc/apt/sources.list.d/redis.list
-${apt} update
 ${apt} install -y redis-server redis-tools --allow-change-held-packages
 ${cp} /etc/redis/redis.conf /etc/redis/redis.conf.bak
 ${sed} -i 's/port 6379/port 0/' /etc/redis/redis.conf
-${sed} -i 's/\# unixsocket \/run\/redis.sock/unixsocket \/var\/run\/redis\/redis-server.sock/' /etc/redis/redis.conf
+# The commented default path differs between Redis packages; any of them is replaced
+${sed} -i 's|^# *unixsocket /.*|unixsocket /var/run/redis/redis-server.sock|' /etc/redis/redis.conf
 ${sed} -i 's/\# unixsocketperm 700/unixsocketperm 770/' /etc/redis/redis.conf
 ${sed} -i 's/\# maxclients 10000/maxclients 10240/' /etc/redis/redis.conf
 ${sed} -i "s/\# requirepass foobared/requirepass $REDISPASSWORD/" /etc/redis/redis.conf
-${cp} /etc/sysctl.conf /etc/sysctl.conf.bak
-${sed} -i '$avm.overcommit_memory = 1' /etc/sysctl.conf
+${echo} "vm.overcommit_memory = 1" > /etc/sysctl.d/99-redis.conf
+sysctl -q -p /etc/sysctl.d/99-redis.conf
 ${usermod} -a -G redis www-data
 ###########################
 # Self-Signed-SSL         #
@@ -972,12 +1142,7 @@ ${echo} ""
 ${echo} "Die Nextcloud wird jetzt 'silent' installiert - bitte haben Sie Geduld!"
 ${echo} "Your Nextcloud will now be installed silently - please be patient!"
 ${echo} ""
-if [ $DATABASE == "m" ]
-then
 sudo -u www-data php /var/www/nextcloud/occ maintenance:install --database "mysql" --database-name "${NCDBNAME}" --database-user "${NCDBUSER}" --database-pass "${NCDBPASSWORD}" --admin-user "${NEXTCLOUDADMINUSER}" --admin-pass "${NEXTCLOUDADMINUSERPASSWORD}" --data-dir "${NEXTCLOUDDATAPATH}"
-else
-sudo -u www-data php /var/www/nextcloud/occ maintenance:install --database "pgsql" --database-name "${NCDBNAME}" --database-user "${NCDBUSER}" --database-pass "${NCDBPASSWORD}" --admin-user "${NEXTCLOUDADMINUSER}" --admin-pass "${NEXTCLOUDADMINUSERPASSWORD}" --data-dir "${NEXTCLOUDDATAPATH}"
-fi
 ${echo} ""
 sleep 1
 declare -l YOURSERVERNAME
@@ -1123,14 +1288,13 @@ echo ""
 ${echo} " » Crowdsec-Installation"
 ${echo} ""
 sleep 1
-${curl} -s https://packagecloud.io/install/repositories/crowdsec/crowdsec/script.deb.sh | sudo bash
-#if [ "$(lsb_release -r | awk '{ print $2 }')" = "24.04" ]
-#then
-#sed -i 's/noble/jammy/' /etc/apt/sources.list.d/crowdsec_crowdsec.list
-#fi
+# packagecloud has no repository for 26.04; its noble (24.04) packages are used
+# (amd64 and arm64).
+${curl} -fsSL https://packagecloud.io/crowdsec/crowdsec/gpgkey | gpg --dearmor -o /usr/share/keyrings/crowdsec-archive-keyring.gpg
+${echo} "deb [signed-by=/usr/share/keyrings/crowdsec-archive-keyring.gpg] https://packagecloud.io/crowdsec/crowdsec/ubuntu/ noble main" > /etc/apt/sources.list.d/crowdsec.list
 ${apt} update
 ${apt} install -y crowdsec
-${apt} install -y crowdsec-firewall-bouncer
+${apt} install -y crowdsec-firewall-bouncer-iptables
 ${systemctl} reload crowdsec.service
 ${systemctl} enable crowdsec.service crowdsec-firewall-bouncer.service
 ${systemctl} restart crowdsec.service crowdsec-firewall-bouncer.service
@@ -1213,7 +1377,6 @@ ${sudo} -u www-data /usr/bin/php /var/www/nextcloud/occ db:add-missing-primary-k
 ${sudo} -u www-data /usr/bin/php /var/www/nextcloud/occ db:add-missing-indices
 ${sudo} -u www-data /usr/bin/php /var/www/nextcloud/occ db:add-missing-columns
 ${sudo} -u www-data /usr/bin/php /var/www/nextcloud/occ db:convert-filecache-bigint
-${sudo} -u www-data /usr/bin/php /var/www/nextcloud/occ security:certificates:import /etc/ssl/certs/ssl-cert-snakeoil.pem
 ${sudo} -u www-data /usr/bin/php /var/www/nextcloud/occ maintenance:repair --include-expensive
 ${clear}
 nextcloud_scan_data
@@ -1233,17 +1396,78 @@ setHOLD
 # D: LE-Zertifikate       #
 # E: LE certificates      #
 ###########################
-if [ $LETSENCRYPT == "y" ]
+# DynDNS hostnames are validated through DNS (DNS-01): the API sets the TXT
+# record, so neither issuing nor renewal needs port 80 to be reachable. The
+# acme.sh hook lives next to acme.sh, outside the folders its upgrades replace.
+if [ "$NETMODE" == "dyndns" ]
 then
-${sudo} -i -u acmeuser bash << EOF
-/home/acmeuser/.acme.sh/acme.sh --issue -d "${NEXTCLOUDDNS}" --server letsencrypt --keylength 4096 -w /var/www/letsencrypt --key-file /etc/letsencrypt/rsa-certs/privkey.pem --ca-file /etc/letsencrypt/rsa-certs/chain.pem --cert-file /etc/letsencrypt/rsa-certs/cert.pem --fullchain-file /etc/letsencrypt/rsa-certs/fullchain.pem --reloadcmd "sudo /bin/systemctl reload nginx.service"
+${chown} root:acmeuser /etc/yourdevice-dyndns/key
+${chmod} 640 /etc/yourdevice-dyndns/key
+${cat} <<'EOF' >/home/acmeuser/.acme.sh/dns_yourdevice.sh
+#!/usr/bin/env sh
+# acme.sh DNS hook: sets the DNS-01 TXT record through the yourdevice DynDNS
+# API. The key of this machine is only valid for its own hostname.
+dns_yourdevice_add() {
+  _yourdevice_acme "$1" "$2" /acme-challenge
+}
+dns_yourdevice_rm() {
+  _yourdevice_acme "$1" "$2" /acme-challenge/delete
+}
+_yourdevice_acme() {
+  . /etc/yourdevice-dyndns/dyndns.conf
+  _yd_key=$(cat /etc/yourdevice-dyndns/key) || return 1
+  printf '{"key":"%s","hostname":"%s","zone":"%s","value":"%s"}' \
+    "$_yd_key" "${1#_acme-challenge.}" "$DYNDNS_ZONE" "$2" \
+    | curl -4 -fsS --max-time 30 -H 'Content-Type: application/json' --data-binary @- "$DYNDNS_API$3" >/dev/null
+}
 EOF
-${sudo} -i -u acmeuser bash << EOF
-/home/acmeuser/.acme.sh/acme.sh --issue -d "${NEXTCLOUDDNS}" --server letsencrypt --keylength ec-384 -w /var/www/letsencrypt --key-file /etc/letsencrypt/ecc-certs/privkey.pem --ca-file /etc/letsencrypt/ecc-certs/chain.pem --cert-file /etc/letsencrypt/ecc-certs/cert.pem --fullchain-file /etc/letsencrypt/ecc-certs/fullchain.pem --reloadcmd "sudo /bin/systemctl reload nginx.service"
+${chown} acmeuser:acmeuser /home/acmeuser/.acme.sh/dns_yourdevice.sh
+fi
+# The same script can be run again later if issuing fails during installation.
+${cat} <<'EOF' >/usr/local/sbin/nextcloud-le-cert
+#!/bin/bash
+# Requests the RSA and the ECC certificate for the Nextcloud domain from
+# Let's Encrypt. nginx serves both, so it switches from the placeholder
+# certificate only once both exist; otherwise nginx keeps running unchanged.
+DOMAIN="$1"
+# The DynDNS hostname is validated via DNS, any other domain via port 80.
+CHALLENGE=(-w /var/www/letsencrypt)
+if [ -f /etc/yourdevice-dyndns/dyndns.conf ] && . /etc/yourdevice-dyndns/dyndns.conf \
+   && [ "$DOMAIN" = "$DYNDNS_HOSTNAME" ]; then
+  CHALLENGE=(--dns dns_yourdevice --dnssleep 30)
+fi
+for spec in "4096 rsa-certs" "ec-384 ecc-certs"; do
+  read -r keylength dir <<< "$spec"
+  sudo -i -u acmeuser /home/acmeuser/.acme.sh/acme.sh --issue -d "$DOMAIN" --server letsencrypt \
+    --keylength "$keylength" "${CHALLENGE[@]}" \
+    --key-file "/etc/letsencrypt/$dir/privkey.pem" --ca-file "/etc/letsencrypt/$dir/chain.pem" \
+    --cert-file "/etc/letsencrypt/$dir/cert.pem" --fullchain-file "/etc/letsencrypt/$dir/fullchain.pem" \
+    --reloadcmd "sudo /bin/systemctl reload nginx.service"
+done
+CONF=/etc/nginx/conf.d/nextcloud.conf
+if [ -s /etc/letsencrypt/rsa-certs/fullchain.pem ] && [ -s /etc/letsencrypt/ecc-certs/fullchain.pem ]; then
+  if grep -q ssl-cert-snakeoil "$CONF"; then
+    cp "$CONF" "$CONF.placeholder"
+    sed -i '/ssl-cert-snakeoil/d' "$CONF"
+    sed -i 's/#ssl/ssl/g' "$CONF"
+    # Never leave nginx with a configuration it cannot load
+    if ! nginx -t || ! systemctl restart nginx; then
+      cp "$CONF.placeholder" "$CONF"
+      systemctl restart nginx
+      echo "Let's Encrypt: nginx lädt die Zertifikate nicht, Platzhalter bleibt aktiv | nginx rejects the certificates" >&2
+      exit 1
+    fi
+  fi
+  exit 0
+fi
+echo "Let's Encrypt: kein Zertifikat für $DOMAIN | no certificate for $DOMAIN" >&2
+exit 1
 EOF
-${sed} -i '/ssl-cert-snakeoil/d' /etc/nginx/conf.d/nextcloud.conf
-${sed} -i s/#\ssl/\ssl/g /etc/nginx/conf.d/nextcloud.conf
-${systemctl} restart nginx
+${chmod} 750 /usr/local/sbin/nextcloud-le-cert
+if /usr/local/sbin/nextcloud-le-cert "$NEXTCLOUDDNS"; then
+LECERT="ok"
+else
+LECERT="failed"
 fi
 ###########################
 # System information-just #
@@ -1262,6 +1486,7 @@ $lsbrelease -ar
 cd /home/"$BENUTZERNAME"/
 ${wget} -q https://raw.githubusercontent.com/warioishere/nextcloud-deploy/main/scripts/update.sh
 ${chmod} +x /home/"$BENUTZERNAME"/update.sh
+${sed} -i "s/^PHPVERSION=.*/PHPVERSION=\"$PHPVERSION\"/" /home/"$BENUTZERNAME"/update.sh
 ###########################
 # D: Abschlußbildschirm   #
 # E: Final screen         #
@@ -1289,14 +1514,33 @@ ${echo} "                    source /root/.bash_aliases"
 ${echo} "                    nocc user:resetpassword $NEXTCLOUDADMINUSER"
 ${echo} ""
 ${echo} "Nextcloud datapath: $NEXTCLOUDDATAPATH"
+if [ "${#ZFS_DISKS[@]}" -eq 2 ]
+then
+${echo} "ZFS-Mirror        : $ZFSPOOL (${ZFS_DISKS[*]}) - zpool status $ZFSPOOL"
+fi
+if [ "$NETMODE" == "dyndns" ]
+then
+${echo} "DynDNS            : $NEXTCLOUDDNS (systemctl status yourdevice-dyndns.timer)"
+fi
+${echo} ""
+if [ "$LECERT" == "ok" ]
+then
+${echo} "Let's Encrypt     : OK"
+else
+${echo} -e "\e[1;31mLet's Encrypt     : FEHLGESCHLAGEN / FAILED - Platzhalter-Zertifikat aktiv\033[0m"
+if [ "$NETMODE" == "dyndns" ]
+then
+${echo} "                    DynDNS-Key und Erreichbarkeit von $DYNDNS_API pruefen, dann:"
+else
+${echo} "                    DNS $NEXTCLOUDDNS -> diese Maschine und Port 80 pruefen, dann:"
+fi
+${echo} "                    sudo /usr/local/sbin/nextcloud-le-cert $NEXTCLOUDDNS"
+fi
 ${echo} ""
 ${echo} "Nextcloud DB      : $NCDBNAME"
 ${echo} "Nextcloud DB-User : $NCDBUSER / $NCDBPASSWORD"
-if [ $DATABASE == "m" ]
-then
 ${echo} ""
 ${echo} "MariaDB-Rootpwd   : $MARIADBROOTPASSWORD"
-fi
 ${echo} ""
 ${echo} "+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++"
 ${echo} ""
@@ -1316,7 +1560,7 @@ EOF
 ###########################
 # Bereinigung/Clean Up    #
 ###########################
-${cat} /dev/null > ~/.bash_history && history -c && history -w
+${cat} /dev/null > ~/.bash_history
 ###########################
 # Laufzeit Berechnung     #
 # Calculating runtime     #

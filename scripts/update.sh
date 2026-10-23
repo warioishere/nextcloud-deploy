@@ -12,8 +12,8 @@
 WEBSERVER="nginx"
 # alternativ "apache2"
 
-PHPVERSION="8.3"
-# alternativ "8.4"
+PHPVERSION="8.5"
+# Ubuntu 26.04: "8.5"
 
 DPATH="/var/www/nextcloud"
 # alternativ "/Pfad/zur/Nextcloud-Software"
